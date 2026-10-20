@@ -40,7 +40,10 @@ namespace NetworkTankArena.Tanks
                 TurretYaw = aimYaw;
         }
 
-        /// <summary>Clients consume server-written canonical yaw without running movement simulation.</summary>
+        public void SimulateMovement(TankControlIntent movementIntent, float deltaTime) =>
+            Simulate(new TankControlIntent(movementIntent.Throttle, movementIntent.Turn, default, false), deltaTime);
+
+        // Server updates set canonical turret yaw independently of local chassis movement.
         public void ApplyReplicatedTurretYaw(float yaw)
         {
             if (TankMath.IsFinite(yaw))

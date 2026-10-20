@@ -88,6 +88,30 @@ namespace NetworkTankArena.Tests
         }
 
         [Test]
+        public void LocalMovementRespondsWithoutChangingAuthoritativeTurretAim()
+        {
+            Vector3 startingPosition = root.transform.position;
+            tank.ApplyReplicatedTurretYaw(90f);
+
+            tank.SimulateMovement(new TankControlIntent(1f, 0f, tank.TurretOrigin + Vector3.left, true), 0.1f);
+
+            Assert.That(root.transform.position.z, Is.EqualTo(startingPosition.z + 0.6f).Within(0.001f));
+            Assert.That(tank.TurretYaw, Is.EqualTo(90f));
+        }
+
+        [Test]
+        public void LocalMovementTurnsBeforeMovingAndClampsInput()
+        {
+            Vector3 startingPosition = root.transform.position;
+
+            tank.SimulateMovement(new TankControlIntent(2f, 2f, default, false), 0.1f);
+
+            Assert.That(root.transform.eulerAngles.y, Is.EqualTo(12f).Within(0.001f));
+            Assert.That(root.transform.position.x, Is.EqualTo(startingPosition.x + 0.124747f).Within(0.001f));
+            Assert.That(root.transform.position.z, Is.EqualTo(startingPosition.z + 0.586889f).Within(0.001f));
+        }
+
+        [Test]
         public void ExtremeFiniteAimCannotOverflowIntoCanonicalYaw()
         {
             Assert.That(TankMath.TryGetAimYaw(Vector3.zero, new Vector3(float.MaxValue, 0f, float.MaxValue), out _), Is.False);

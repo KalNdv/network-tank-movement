@@ -7,16 +7,18 @@ using UnityEngine;
 namespace NetworkTankArena.Networking
 {
     [DisallowMultipleComponent]
-    [RequireComponent(typeof(NetworkObject), typeof(NetworkTransform), typeof(TankSimulation))]
+    [RequireComponent(typeof(NetworkObject), typeof(AnticipatedNetworkTransform), typeof(TankSimulation))]
     public sealed class NetworkTankController : NetworkBehaviour
     {
         [SerializeField, Range(1f, 60f)] private float inputSendRate = 20f;
         [SerializeField, Min(0.1f)] private float inputTimeoutSeconds = 0.5f;
+        [SerializeField, Min(0f)] private float remoteMovementSmoothingSeconds = 0.1f;
 
         private readonly NetworkVariable<float> turretYaw = new NetworkVariable<float>(0f,
             NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
         private readonly ServerTankIntent serverIntent = new ServerTankIntent();
         private TankSimulation tank;
+        private AnticipatedNetworkTransform anticipatedNetworkTransform;
         private LocalNetworkSession localSession;
         private TankControlIntent localIntent;
         private ulong sequence;
@@ -27,6 +29,7 @@ namespace NetworkTankArena.Networking
         private void Awake()
         {
             tank = GetComponent<TankSimulation>();
+            anticipatedNetworkTransform = GetComponent<AnticipatedNetworkTransform>();
             // The existing local weapon cannot spawn replicated projectiles. Keep this lab movement-only.
             if (TryGetComponent(out TankWeapon weapon))
                 weapon.enabled = false;
@@ -113,12 +116,37 @@ namespace NetworkTankArena.Networking
 
         private void FixedUpdate()
         {
-            if (!IsSpawned || !IsServer)
+            if (!IsSpawned)
                 return;
+
+            if (!IsServer)
+            {
+                if (CanReadLocalInput)
+                {
+                    // The owner moves provisionally; incoming server poses can still replace this movement.
+                    Physics.SyncTransforms();
+                    tank.SimulateMovement(localIntent, Time.fixedDeltaTime);
+                    anticipatedNetworkTransform.AnticipateMove(transform.position);
+                    anticipatedNetworkTransform.AnticipateRotate(transform.rotation);
+                }
+                return;
+            }
 
             float timeout = TankMath.IsFinite(inputTimeoutSeconds) ? Mathf.Max(0.1f, inputTimeoutSeconds) : 0.5f;
             tank.Simulate(serverIntent.Read(Time.unscaledTimeAsDouble, timeout), Time.fixedDeltaTime);
             turretYaw.Value = tank.TurretYaw;
+        }
+
+        public override void OnReanticipate(double lastRoundTripTime)
+        {
+            if (IsServer || IsOwner || !anticipatedNetworkTransform.ShouldReanticipate)
+                return;
+
+            float smoothingDurationSeconds = TankMath.IsFinite(remoteMovementSmoothingSeconds)
+                ? Mathf.Max(0f, remoteMovementSmoothingSeconds) : 0.1f;
+            // Remote tanks smooth received poses without simulating their movement locally.
+            anticipatedNetworkTransform.Smooth(anticipatedNetworkTransform.PreviousAnticipatedState,
+                anticipatedNetworkTransform.AuthoritativeState, smoothingDurationSeconds);
         }
 
         private void OnTurretYawChanged(float previous, float current)
