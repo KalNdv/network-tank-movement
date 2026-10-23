@@ -13,6 +13,9 @@ namespace NetworkTankArena.Tanks
         private CharacterController characterController;
 
         public float TurretYaw { get; private set; }
+        // Corrections use the same speed limits as driving.
+        public float MoveSpeed => moveSpeed;
+        public float TurnSpeed => turnSpeed;
         public Vector3 TurretOrigin => transform.position + Vector3.up * turretHeight;
 
         private void Awake()

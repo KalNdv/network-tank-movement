@@ -201,6 +201,13 @@ namespace NetworkTankArena.Networking
                     StartClient();
             }
             GUI.enabled = true;
+            // Only the remote client's local tank needs an owner correction slider.
+            if (localPlayer != null && !localPlayer.IsServer)
+            {
+                GUILayout.Label($"Correction min: {localPlayer.CorrectionSmoothingSeconds:0.00} s");
+                localPlayer.CorrectionSmoothingSeconds = GUILayout.HorizontalSlider(
+                    localPlayer.CorrectionSmoothingSeconds, 0.05f, 0.2f);
+            }
             GUILayout.EndArea();
         }
     }

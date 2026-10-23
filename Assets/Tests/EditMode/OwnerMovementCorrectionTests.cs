@@ -94,6 +94,43 @@ namespace NetworkTankArena.Tests
         }
 
         [Test]
+        public void DelayedSnapshotsCannotReverseFullSpeedForwardMovement()
+        {
+            const float frameSeconds = 1f / 60f;
+            for (int frame = 0; frame < 60; frame++)
+            {
+                // Skip every third snapshot to exercise correction replacement across packet gaps.
+                if (frame % 3 == 0 && frame % 9 != 0)
+                    movementCorrection.Begin(new Pose(tankRoot.transform.position, Quaternion.identity),
+                        new Pose(tankRoot.transform.position - Vector3.right * 1.8f, Quaternion.identity),
+                        0.1f, 6f, 120f);
+                float previousPosition = tankRoot.transform.position.x;
+                movementCorrection.Apply(tankRoot.transform, frameSeconds);
+                tankRoot.transform.position += Vector3.right * (6f * frameSeconds);
+
+                Assert.That(tankRoot.transform.position.x, Is.GreaterThanOrEqualTo(previousPosition - 0.00001f));
+            }
+        }
+
+        [Test]
+        public void BoundedCorrectionStillReachesTheServerWhenInputStops()
+        {
+            movementCorrection.Begin(new Pose(tankRoot.transform.position, Quaternion.identity),
+                new Pose(new Vector3(8.2f, 0f, 0f), Quaternion.Euler(0f, 36f, 0f)), 0.05f, 6f, 120f);
+
+            movementCorrection.Apply(tankRoot.transform, 0.02f);
+            Assert.That(tankRoot.transform.position.x, Is.EqualTo(9.88f).Within(0.0001f));
+            Assert.That(tankRoot.transform.eulerAngles.y, Is.LessThanOrEqualTo(2.42f));
+
+            // A limited correction must still finish when no further snapshots arrive.
+            for (int frame = 0; frame < 30; frame++)
+                movementCorrection.Apply(tankRoot.transform, 0.02f);
+
+            Assert.That(tankRoot.transform.position.x, Is.EqualTo(8.2f).Within(0.0001f));
+            Assert.That(tankRoot.transform.eulerAngles.y, Is.EqualTo(36f).Within(0.001f));
+        }
+
+        [Test]
         public void DisabledOwnerCannotQueueACorrectionForReenable()
         {
             // Set up a late owner update without starting a network session.

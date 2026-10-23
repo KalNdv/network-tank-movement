@@ -10,7 +10,8 @@ namespace NetworkTankArena.Networking
         private Quaternion remainingRotationCorrection = Quaternion.identity;
         private float remainingCorrectionSeconds;
 
-        internal bool Begin(Pose previousPose, Pose authoritativePose, float smoothingDurationSeconds)
+        internal bool Begin(Pose previousPose, Pose authoritativePose, float smoothingDurationSeconds,
+            float maximumPositionCorrectionSpeed = float.MaxValue, float maximumRotationCorrectionSpeed = float.MaxValue)
         {
             // Replace any unfinished correction with the newest server update.
             Reset();
@@ -26,6 +27,11 @@ namespace NetworkTankArena.Networking
             remainingPositionCorrection = authoritativePose.position - previousPose.position;
             remainingRotationCorrection = authoritativePose.rotation * Quaternion.Inverse(previousPose.rotation);
             remainingCorrectionSeconds = smoothingDurationSeconds;
+            // Extend catch-up time so corrections cannot overpower full-speed movement or turning.
+            if (TankMath.IsFinite(maximumPositionCorrectionSpeed) && maximumPositionCorrectionSpeed > 0f)
+                remainingCorrectionSeconds = Mathf.Max(remainingCorrectionSeconds, positionError / maximumPositionCorrectionSpeed);
+            if (TankMath.IsFinite(maximumRotationCorrectionSpeed) && maximumRotationCorrectionSpeed > 0f)
+                remainingCorrectionSeconds = Mathf.Max(remainingCorrectionSeconds, rotationError / maximumRotationCorrectionSpeed);
             return true;
         }
 

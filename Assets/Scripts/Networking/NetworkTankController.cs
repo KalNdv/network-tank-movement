@@ -7,6 +7,8 @@ using UnityEngine;
 namespace NetworkTankArena.Networking
 {
     [DisallowMultipleComponent]
+    // Read this frame's input before moving or sending it.
+    [DefaultExecutionOrder(100)]
     [RequireComponent(typeof(NetworkObject), typeof(AnticipatedNetworkTransform), typeof(TankSimulation))]
     public sealed class NetworkTankController : NetworkBehaviour
     {
@@ -14,7 +16,7 @@ namespace NetworkTankArena.Networking
         [SerializeField, Min(0.1f)] private float inputTimeoutSeconds = 0.5f;
         [SerializeField, Min(0f)] private float remoteMovementSmoothingSeconds = 0.1f;
        
-        // Time used to smooth small corrections for the locally controlled tank.
+        // Minimum time for local corrections; speed limits can extend it.
         [SerializeField, Range(0.05f, 0.2f), InspectorName("Correction (s)")]
         private float ownerCorrectionSmoothingSeconds = 0.1f;
 
@@ -30,6 +32,14 @@ namespace NetworkTankArena.Networking
         private double nextSendTime;
 
         public bool CanReadLocalInput => IsSpawned && IsClient && IsOwner && isActiveAndEnabled;
+
+        // The runtime slider and Inspector use the same bounded setting.
+        public float CorrectionSmoothingSeconds
+        {
+            get => TankMath.IsFinite(ownerCorrectionSmoothingSeconds)
+                ? Mathf.Clamp(ownerCorrectionSmoothingSeconds, 0.05f, 0.2f) : 0.1f;
+            set => ownerCorrectionSmoothingSeconds = TankMath.IsFinite(value) ? Mathf.Clamp(value, 0.05f, 0.2f) : 0.1f;
+        }
 
         private void Awake()
         {
@@ -101,6 +111,16 @@ namespace NetworkTankArena.Networking
 
         private void Update()
         {
+            // Apply correction and input each rendered frame; the server still uses fixed steps.
+            if (CanReadLocalInput && !IsServer)
+            {
+                ownerMovementCorrection.Apply(transform, Time.deltaTime);
+                Physics.SyncTransforms();
+                tank.SimulateMovement(localIntent, Time.deltaTime);
+                anticipatedNetworkTransform.AnticipateMove(transform.position);
+                anticipatedNetworkTransform.AnticipateRotate(transform.rotation);
+            }
+
             if (!CanReadLocalInput || Time.unscaledTimeAsDouble < nextSendTime)
                 return;
 
@@ -118,34 +138,18 @@ namespace NetworkTankArena.Networking
             if (!IsSpawned || !IsServer || !isActiveAndEnabled)
                 return;
 
+            // Use the same real-time clock here and in FixedUpdate so fresh input never looks future-dated.
             serverIntent.TryReceive(rpcParams.Receive.SenderClientId, OwnerClientId, inputSequence,
-                new TankControlIntent(throttle, turn, aimPoint, hasAimPoint), Time.unscaledTimeAsDouble);
+                new TankControlIntent(throttle, turn, aimPoint, hasAimPoint), Time.realtimeSinceStartupAsDouble);
         }
 
         private void FixedUpdate()
         {
-            if (!IsSpawned)
+            if (!IsSpawned || !IsServer)
                 return;
-
-            if (!IsServer)
-            {
-                if (CanReadLocalInput)
-                {
-                    // The owner moves provisionally; incoming server poses can still replace this movement.
-
-                    // Correct first, then simulate the current input from the adjusted pose.
-
-                    ownerMovementCorrection.Apply(transform, Time.fixedDeltaTime);
-                    Physics.SyncTransforms();
-                    tank.SimulateMovement(localIntent, Time.fixedDeltaTime);
-                    anticipatedNetworkTransform.AnticipateMove(transform.position);
-                    anticipatedNetworkTransform.AnticipateRotate(transform.rotation);
-                }
-                return;
-            }
 
             float timeout = TankMath.IsFinite(inputTimeoutSeconds) ? Mathf.Max(0.1f, inputTimeoutSeconds) : 0.5f;
-            tank.Simulate(serverIntent.Read(Time.unscaledTimeAsDouble, timeout), Time.fixedDeltaTime);
+            tank.Simulate(serverIntent.Read(Time.realtimeSinceStartupAsDouble, timeout), Time.fixedDeltaTime);
             turretYaw.Value = tank.TurretYaw;
         }
 
@@ -160,7 +164,8 @@ namespace NetworkTankArena.Networking
                 AnticipatedNetworkTransform.TransformState previousState = anticipatedNetworkTransform.PreviousAnticipatedState;
                 AnticipatedNetworkTransform.TransformState authoritativeState = anticipatedNetworkTransform.AuthoritativeState;
                 if (ownerMovementCorrection.Begin(new Pose(previousState.Position, previousState.Rotation),
-                    new Pose(authoritativeState.Position, authoritativeState.Rotation), ownerCorrectionSmoothingSeconds))
+                    new Pose(authoritativeState.Position, authoritativeState.Rotation), CorrectionSmoothingSeconds,
+                    tank.MoveSpeed, tank.TurnSpeed))
                     // Restore the previous pose while the queued correction is applied gradually.
                     anticipatedNetworkTransform.AnticipateState(previousState);
                 return;
