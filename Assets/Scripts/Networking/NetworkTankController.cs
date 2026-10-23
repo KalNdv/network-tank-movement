@@ -13,10 +13,15 @@ namespace NetworkTankArena.Networking
         [SerializeField, Range(1f, 60f)] private float inputSendRate = 20f;
         [SerializeField, Min(0.1f)] private float inputTimeoutSeconds = 0.5f;
         [SerializeField, Min(0f)] private float remoteMovementSmoothingSeconds = 0.1f;
+       
+        // Time used to smooth small corrections for the locally controlled tank.
+        [SerializeField, Range(0.05f, 0.2f), InspectorName("Correction (s)")]
+        private float ownerCorrectionSmoothingSeconds = 0.1f;
 
         private readonly NetworkVariable<float> turretYaw = new NetworkVariable<float>(0f,
             NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
         private readonly ServerTankIntent serverIntent = new ServerTankIntent();
+        private readonly OwnerMovementCorrection ownerMovementCorrection = new OwnerMovementCorrection();
         private TankSimulation tank;
         private AnticipatedNetworkTransform anticipatedNetworkTransform;
         private LocalNetworkSession localSession;
@@ -76,6 +81,9 @@ namespace NetworkTankArena.Networking
             ReleaseLocalOwner();
             localIntent = default;
             serverIntent.Reset();
+
+            // Discard corrections so they cannot survive disabling the controller.
+            ownerMovementCorrection.Reset();
             // Keep the sender sequence across component re-enables on the same spawned object.
         }
 
@@ -124,6 +132,10 @@ namespace NetworkTankArena.Networking
                 if (CanReadLocalInput)
                 {
                     // The owner moves provisionally; incoming server poses can still replace this movement.
+
+                    // Correct first, then simulate the current input from the adjusted pose.
+
+                    ownerMovementCorrection.Apply(transform, Time.fixedDeltaTime);
                     Physics.SyncTransforms();
                     tank.SimulateMovement(localIntent, Time.fixedDeltaTime);
                     anticipatedNetworkTransform.AnticipateMove(transform.position);
@@ -139,8 +151,20 @@ namespace NetworkTankArena.Networking
 
         public override void OnReanticipate(double lastRoundTripTime)
         {
-            if (IsServer || IsOwner || !anticipatedNetworkTransform.ShouldReanticipate)
+            // NGO can call this even when the controller is disabled.
+            if (IsServer || !isActiveAndEnabled || !anticipatedNetworkTransform.ShouldReanticipate)
                 return;
+
+            if (IsOwner)
+            {
+                AnticipatedNetworkTransform.TransformState previousState = anticipatedNetworkTransform.PreviousAnticipatedState;
+                AnticipatedNetworkTransform.TransformState authoritativeState = anticipatedNetworkTransform.AuthoritativeState;
+                if (ownerMovementCorrection.Begin(new Pose(previousState.Position, previousState.Rotation),
+                    new Pose(authoritativeState.Position, authoritativeState.Rotation), ownerCorrectionSmoothingSeconds))
+                    // Restore the previous pose while the queued correction is applied gradually.
+                    anticipatedNetworkTransform.AnticipateState(previousState);
+                return;
+            }
 
             float smoothingDurationSeconds = TankMath.IsFinite(remoteMovementSmoothingSeconds)
                 ? Mathf.Max(0f, remoteMovementSmoothingSeconds) : 0.1f;
@@ -178,6 +202,9 @@ namespace NetworkTankArena.Networking
         {
             localIntent = default;
             serverIntent.Reset();
+
+            // Remember! Ownership changes and despawning must also discard pending correction!!
+            ownerMovementCorrection.Reset();
             sequence = 0;
             nextSendTime = 0d;
         }
